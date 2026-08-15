@@ -2,7 +2,7 @@
   "name": "vscode-editor-mcp",
   "displayName": "Editor MCP",
   "description": "Exposes VS Code's live editor state and editor actions to external MCP clients over a loopback HTTP server.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "wisdomrock",
   "license": "MIT",
   "engines": {

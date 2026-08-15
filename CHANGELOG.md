@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.1.0] - Unreleased
+## [0.1.1]
 
-Initial release.
+Initial public release.
 
 - MCP server hosted in the extension host, served over Streamable HTTP on loopback.
 - Read tools: `get_active_file`, `get_selection`, `get_open_tabs`, `get_diagnostics`,
