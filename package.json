@@ -1,0 +1,155 @@
+{
+  "name": "vscode-editor-mcp",
+  "displayName": "Editor MCP",
+  "description": "Exposes VS Code's live editor state and editor actions to external MCP clients over a loopback HTTP server.",
+  "version": "0.1.0",
+  "publisher": "wisdomrock",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.104.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "keywords": [
+    "mcp",
+    "model context protocol",
+    "ai",
+    "agent",
+    "claude"
+  ],
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wisdomrock/vscode-editor-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wisdomrock/vscode-editor-mcp/issues"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "vscodeEditorMcp.provider",
+        "label": "VS Code Editor (Editor MCP)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "vscodeEditorMcp.start",
+        "title": "Start Server",
+        "category": "Editor MCP"
+      },
+      {
+        "command": "vscodeEditorMcp.stop",
+        "title": "Stop Server",
+        "category": "Editor MCP"
+      },
+      {
+        "command": "vscodeEditorMcp.restart",
+        "title": "Restart Server",
+        "category": "Editor MCP"
+      },
+      {
+        "command": "vscodeEditorMcp.status",
+        "title": "Show Server Status",
+        "category": "Editor MCP"
+      },
+      {
+        "command": "vscodeEditorMcp.copyUrl",
+        "title": "Copy Server URL",
+        "category": "Editor MCP"
+      },
+      {
+        "command": "vscodeEditorMcp.copyClaudeCommand",
+        "title": "Copy 'claude mcp add' Command",
+        "category": "Editor MCP"
+      },
+      {
+        "command": "vscodeEditorMcp.showLogs",
+        "title": "Show Logs",
+        "category": "Editor MCP"
+      }
+    ],
+    "configuration": {
+      "title": "Editor MCP",
+      "properties": {
+        "vscodeEditorMcp.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the MCP server automatically when this window opens. Off by default because the server listens on a local network port."
+        },
+        "vscodeEditorMcp.port": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port to listen on. 0 lets the OS pick a free port, which is required if you run more than one VS Code window. Clients discover the real port via the discovery file."
+        },
+        "vscodeEditorMcp.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "enum": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "description": "Loopback interface to bind. Binding a non-loopback address is intentionally not supported."
+        },
+        "vscodeEditorMcp.allowWrite": {
+          "type": "boolean",
+          "default": true,
+          "description": "Expose tools that modify files (edit_file, create_file, save_file). Edits are applied through the editor's undo stack and are left unsaved unless save_file is called."
+        },
+        "vscodeEditorMcp.requireAuth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require a bearer token on every request. The token is regenerated per server start and written to the discovery file."
+        },
+        "vscodeEditorMcp.maxFileBytes": {
+          "type": "number",
+          "default": 1048576,
+          "description": "Refuse to return file contents larger than this many bytes. Tools will suggest a line range instead."
+        },
+        "vscodeEditorMcp.sessionIdleMinutes": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "description": "Drop a client session after this many minutes with no requests. MCP clients do not reliably signal disconnect, so without this an exited client stays counted as connected. 0 disables reaping."
+        },
+        "vscodeEditorMcp.registerWithCopilot": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also advertise this server to VS Code's built-in MCP client, so Copilot agent mode can use the same tools."
+        },
+        "vscodeEditorMcp.discoveryDir": {
+          "type": "string",
+          "default": "",
+          "description": "Directory for discovery files. Empty uses ~/.vscode-editor-mcp."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run check-types && node esbuild.js --production",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc --noEmit",
+    "smoke": "node test/smoke/build.js && node dist-test/smoke.js",
+    "lint": "eslint src",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.104.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}
