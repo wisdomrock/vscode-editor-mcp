@@ -1,4 +1,4 @@
-# Editor MCP
+# Editor MCP Server
 
 Exposes your live VS Code editor state to any MCP client — Claude Code, custom agents,
 or VS Code's own Copilot agent mode.
