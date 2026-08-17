@@ -1,4 +1,15 @@
-# Editor MCP Server
+# Editor State
+
+> **⚠️ This README describes the removed 0.1.x extension and is being rewritten.**
+>
+> The MCP server documented below — the loopback HTTP listener and its tools — has been
+> **deleted**. It worked, but it could never be relied on: the server was off by default,
+> bound a dynamic port, rotated its auth token every start, and Claude Code only resolves
+> MCP servers at session start, so its tools were usually absent when a skill needed them.
+>
+> The replacement mirrors editor state into a gitignored JSON file that any agent can
+> simply read — no port, no token, no configuration, nothing to restart. See
+> [design.md](design.md); this file is rewritten in M4.
 
 Exposes your live VS Code editor state to any MCP client — Claude Code, custom agents,
 or VS Code's own Copilot agent mode.
