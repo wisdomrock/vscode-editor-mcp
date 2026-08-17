@@ -1,0 +1,17 @@
+{
+  "name": "editor-state",
+  "displayName": "Editor State skills",
+  "version": "0.1.0",
+  "description": "Skills that resolve what you are looking at in your editor by reading the .editor-state/state.json mirror written by the Editor State VS Code extension.",
+  "author": {
+    "name": "wisdomrock"
+  },
+  "repository": "https://github.com/wisdomrock/editor-state-mcp",
+  "license": "MIT",
+  "keywords": [
+    "editor",
+    "selection",
+    "explain",
+    "vscode"
+  ]
+}

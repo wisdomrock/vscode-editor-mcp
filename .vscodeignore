@@ -22,3 +22,5 @@ dist-test/**
 CHANGELOG-dev.md
 design.md
 design.v1-proposed.md
+skills/**
+.claude-plugin/**

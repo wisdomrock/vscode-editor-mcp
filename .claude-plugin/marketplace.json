@@ -1,0 +1,14 @@
+{
+  "marketplaces": [
+    {
+      "name": "editor-state-mcp",
+      "plugins": [
+        {
+          "name": "editor-state",
+          "source": "./",
+          "version": "0.1.0"
+        }
+      ]
+    }
+  ]
+}

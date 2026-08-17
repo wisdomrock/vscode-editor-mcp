@@ -85,6 +85,31 @@ The raw 0-based VS Code values are also included, under `selection.zeroBased`.
 The full field reference and the normative indexing rules live in
 [design.md §5](design.md). A consumer-facing `docs/state-file.md` ships with M4.
 
+## Claude Code skills
+
+The extension writes the file; skills consume it. Two are bundled in this repo as a Claude Code
+plugin, so they can be installed with the same version as the extension:
+
+| Skill | What it does |
+| --- | --- |
+| `/explain-selection` | Explains the lines you have selected, in the context of the surrounding file |
+| `/explain-file` | Writes a line-by-line explanation of the active file to a `.$.md` beside it |
+
+```bash
+claude plugin marketplace add wisdomrock/editor-state-mcp
+claude plugin install editor-state@editor-state-mcp
+```
+
+Both resolve their target by reading `.editor-state/state.json` first, and deliberately **ignore**
+the IDE selection tags the harness attaches to a message. Those tags are one-shot change events —
+they fire when the selection changes and are not resent while it stays highlighted — so a skill that
+reads them behaves differently depending on which message it was invoked from. Reading the state
+file instead is what makes the result deterministic.
+
+They are **not** part of the `.vsix`: VS Code extensions and Claude Code plugins are separate
+mechanisms, and Claude Code does not scan `~/.vscode/extensions/`. Installing the extension without
+the plugin is fine — the file is written either way, and any agent can read it.
+
 ## Commands
 
 | Command | What it does |
