@@ -746,7 +746,7 @@ write happens immediately on activate with `reason: "activate"`.
   activates and writes nothing; `npm test` green.
 - **Outstanding:** run the probe and paste the result into §6.1. This gates M1's schema.
 
-### M1 — Snapshot + write (the core)
+### M1 — Snapshot + write (the core) — **done**
 - `state/types.ts`, `state/snapshot.ts` (pure), `state/collect.ts`, `state/sink.ts`.
 - `StateWatcher` with selection + active-editor events only. Write once on activate.
 - Sink: no-op skip, serialised writes, swallow-and-log, and the dropped-write re-schedule (§8).

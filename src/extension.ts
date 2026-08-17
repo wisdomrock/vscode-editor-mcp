@@ -1,16 +1,22 @@
+import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
 import { CONFIG_SECTION, needsSinkReset, readConfig, type StateConfig } from './config';
 import { initLog, log } from './log';
 import { runFocusProbe } from './probe';
+import { StateFileSink } from './state/sink';
+import { StateWatcher } from './state/watcher';
 import { createStatusBar, type MirrorStatus, type StatusBarHandle } from './statusBar';
 
 /**
- * M0 scaffold. The extension activates, reports its configuration and exposes the
- * §6.1 focus probe; it does not write anything yet. StateWatcher, StateFileSink
- * and HeartbeatWriter land in M1/M2 (design.md §13).
+ * M1: the extension mirrors selection + active-editor state into `config.path`
+ * on every relevant event, debounced and coalesced (design.md §6, §8). The
+ * §7 focus-loss defences (active-tab fallback, carried-forward activeEditor,
+ * lastDeliberateSelection) and the heartbeat land in M2.
  */
 
 let statusBar: StatusBarHandle | undefined;
+let sink: StateFileSink | undefined;
+let watcher: StateWatcher | undefined;
 let config: StateConfig;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -22,9 +28,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBar = createStatusBar();
   context.subscriptions.push(statusBar);
 
+  // Stable per extension-host process (design.md §5.2): pid alone is reused by
+  // the OS across restarts, so mix in activation time.
+  const windowId = crypto.createHash('md5').update(`${process.pid}-${Date.now()}`).digest('hex').slice(0, 8);
+
+  sink = new StateFileSink({
+    getEnabled: () => config.enabled,
+    getConfiguredPath: () => config.path,
+    getWorkspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+  });
+  watcher = new StateWatcher(sink, () => config, { extensionVersion: version, windowId });
+  context.subscriptions.push(sink, watcher);
+
   context.subscriptions.push(
-    vscode.commands.registerCommand('editorStateMcp.writeNow', () => notYetImplemented('Write Now')),
-    vscode.commands.registerCommand('editorStateMcp.openStateFile', () => notYetImplemented('Open State File')),
+    vscode.commands.registerCommand('editorStateMcp.writeNow', async () => {
+      await watcher?.flush('manual');
+      statusBar?.update(currentStatus());
+      vscode.window.showInformationMessage('Editor State: wrote the current state file.');
+    }),
+    vscode.commands.registerCommand('editorStateMcp.openStateFile', async () => {
+      const path = sink?.currentPath();
+      if (!path) {
+        vscode.window.showInformationMessage('Editor State: nothing written yet.');
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
+      await vscode.window.showTextDocument(doc, { preview: false });
+    }),
     vscode.commands.registerCommand('editorStateMcp.showLogs', () => log.show()),
     vscode.commands.registerCommand('editorStateMcp.probeFocus', () => runFocusProbe()),
   );
@@ -41,30 +71,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // reset the sink; everything else applies on the next write.
       if (needsSinkReset(previous, next)) {
         log.info(`Sink config changed (enabled=${next.enabled}, path=${next.path})`);
+        if (!next.enabled) void sink?.removeFile();
       }
       statusBar?.update(currentStatus());
     }),
   );
 
+  watcher.start();
   statusBar.update(currentStatus());
   log.info(
     `editor-state-mcp ${version} activated — enabled=${config.enabled}, path=${config.path}, ` +
       `debounce=${config.debounceMs}ms, heartbeat=${config.heartbeatMs}ms`,
   );
-  log.info('M0 scaffold: no state is written yet. Run "Editor State: Probe Focus Behaviour" for the §6.1 experiments.');
 }
 
 export async function deactivate(): Promise<void> {
-  // M1 awaits a final flush here with reason "shutdown" (design.md §8.1).
+  await watcher?.flush('shutdown');
   statusBar = undefined;
+  sink = undefined;
+  watcher = undefined;
 }
 
 function currentStatus(): MirrorStatus {
   if (!config.enabled) return { state: 'disabled', writes: 0 };
   if (!vscode.workspace.workspaceFolders?.length) return { state: 'noWorkspace', writes: 0 };
-  return { state: 'idle', writes: 0 };
-}
-
-function notYetImplemented(what: string): void {
-  vscode.window.showInformationMessage(`Editor State: "${what}" arrives in M1, once the state file is being written.`);
+  if (sink?.lastError) return { state: 'error', writes: sink.writes, error: sink.lastError, path: sink.currentPath() };
+  if (!sink?.writes) return { state: 'idle', writes: 0, path: sink?.currentPath() };
+  return { state: 'active', writes: sink.writes, path: sink.currentPath(), lastWriteMs: sink.lastWriteMs };
 }

@@ -1,10 +1,12 @@
 import { report } from './harness';
 import { run as atomicWrite } from './atomicWrite.test';
+import { run as snapshot } from './snapshot.test';
+import { run as sink } from './sink.test';
 
-// M1 adds snapshot.test.ts here — the §5.4 off-by-one table, carry-forward and
-// truncation. It needs no vscode stub, because buildSnapshot is pure.
 async function main(): Promise<void> {
   await atomicWrite();
+  snapshot();
+  await sink();
   report();
 }
 
