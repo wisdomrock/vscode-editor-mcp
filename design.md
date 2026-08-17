@@ -548,14 +548,32 @@ the proportionate control.
 
 ### 10.1 Skill tier changes
 
-Both skills resolve their target through an explicit tier list. The state file becomes Tier 2, and
-the MCP tier disappears with the server.
+Both skills resolve their target through an explicit tier list. The state file becomes Tier 1, the
+MCP tier survives only for *other* editors' servers, and the harness tag is **banned outright**.
 
 | Tier | Source | Why this rank |
 |---|---|---|
-| 1 | `<ide_selection>` harness tag | Guaranteed fresh *and* guaranteed to come from the window that sent the prompt. Strictly the best signal when present. |
-| **2 (new)** | `.editor-state/state.json` | Always available, no config. Fresh to within the debounce window. |
-| 3 | Older tags in history / ask the user | Last resort. |
+| **1 (new)** | `.editor-state/state.json` | Always available, no config, no tool call. Fresh to within the debounce window, with `updatedAtMs` making staleness self-describing. |
+| 2 | A connected editor MCP server (JetBrains, etc.) | Live pull, but absent in most sessions and unavailable for VS Code now that 0.1.x is deleted. |
+| 3 | Ask the user | Last resort. May name a *file* from the skill's own prior tool calls, but never from a harness tag. |
+
+**The `<ide_selection>` tag is not a tier — it is prohibited.** *(Decided after the predecessor doc,
+which ranked it Tier 1.)* The reasoning that made it Tier 1 — "guaranteed fresh, and bound to the
+window that sent the prompt" — is true only *when it fires*, and that is the problem: it is a
+one-shot change event that rides along with a single message and is not resent while the same
+selection stays highlighted. A skill that reads it resolves differently depending on which message
+it was invoked from, which is non-determinism the state file exists to remove. Keeping it as a
+higher tier would also reintroduce the conflict-resolution problem (§10.2 step 6 in the predecessor)
+for no gain once Tier 1 is reliable.
+
+**Accepted cost.** The tag was the only signal *bound to the window that sent the prompt*. Banning
+it means multi-window ambiguity (R4) is no longer covered at all, and falls entirely to
+`window.focused` plus the reader saying which file it picked. Phase 2's `latest.json` is now the only
+real fix for R4, which raises its priority.
+
+**Interim cost.** Until M1 ships, Tier 1 resolves to nothing, so both skills are strictly *worse*
+than before — they will ask the user more often. This is a deliberate trade of availability for
+determinism, and it resolves when M1 lands.
 
 Also update the **Known MCP capability gaps** note in `explain-selection` to record Claude Code's
 built-in `ide` server (`getDiagnostics` / `executeCode` only, no selection tool), so no future
@@ -564,25 +582,29 @@ session wastes a `ToolSearch` rediscovering it.
 ### 10.2 Read algorithm for skills
 
 ```
-1. Read <cwd>/.editor-state/state.json.
-     Missing → fall to next tier (extension not installed, or no workspace).
+0. Ignore every <ide_selection> / <ide_opened_file> tag in the conversation,
+   including any present on this very message. Not a tier, not a tiebreaker.
+1. Read <cwd>/.editor-state/state.json; if absent, try the git repo root.
+     Missing in both → fall to next tier (extension not installed, or no workspace).
 2. schemaVersion > 1 → do not guess; fall through and say why.
-3. age = now - updatedAtMs
+3. cwd not inside workspace.folders → the file belongs to another window or
+   project; ignore it and fall through.
+4. age = now - updatedAtMs
      age < 60 s            → use silently
      60 s ≤ age < 30 min   → use, but state the age: "using the selection from
                               ~4 min ago (lines 3–5 of Hello.py)"
      age ≥ 30 min          → treat as a hint only; confirm before explaining.
-                              Optionally Read window.heartbeatPath: a heartbeat
-                              older than ~90 s means the host is dead, not idle —
-                              say so instead of implying live state.
-4. window.focused === false and a fresher tag exists → prefer the tag.
-5. selection non-null and !isEmpty → use it.
+                              Read window.heartbeatPath: a heartbeat older than
+                              ~90 s means the host is dead, not idle — say so
+                              instead of implying live state.
+5. selection non-null and !isEmpty → use it (always live-or-null, never carried
+                                     forward, so it needs no caveat beyond step 4)
    selection null or isEmpty       → use lastDeliberateSelection and say so, with
                                      its own capturedAtMs age: "nothing is selected
                                      now; explaining your last selection, lines 4–4
                                      of Hello.py"
-6. Cross-check: if a harness tag is also present and disagrees, the tag wins (it is
-   bound to this prompt); mention the discrepancy rather than silently picking.
+6. window.focused === false → another window may be the one the user means. Use it,
+   but name the file you picked so a wrong guess is obvious immediately.
 7. Always Read the underlying file for surrounding context — never explain from
    selection.text alone, and never trust it over the file on disk.
 ```
@@ -771,7 +793,7 @@ stdio MCP server, global mirror + `latest.json`, `events.jsonl`. Only after M4 h
 | R1 | Extension host crashes → file silently stale → skill explains the wrong code | `updatedAtMs` + staleness policy (§10.2) + **heartbeat in v1** (§8.2). Downgraded from the predecessor's "sharpest remaining risk" because the fix now ships in M2. |
 | R2 | Writes into the workspace trip filesystem watchers in the user's project | Coalescing debounce + no-op skip (§8) + heartbeat kept out of the workspace (§8.2). **Sharpest remaining risk**, and a direct cost of choosing workspace-primary (§4.1). Explicit M3 acceptance test. |
 | R3 | Windows rename contention | **Measured in M0 — see §14.1.** Confirmed real and unavoidable; reduced by a longer jittered backoff and made harmless by the sink re-schedule (§8). Tearing, the property that actually matters, is proven absolute. |
-| R4 | Multiple VS Code windows on one workspace race on one file | v1: last-writer-wins, with `window.focused` and `window.id` recorded so a reader can detect it. Fixed properly by Phase 2's `latest.json`. **Accepted limitation — document it in `docs/state-file.md`.** |
+| R4 | Multiple VS Code windows on one workspace race on one file | v1: last-writer-wins, with `window.focused` and `window.id` recorded so a reader can detect it. **Raised in severity by the §10.1 tag ban** — the harness tag was the only signal bound to the window that sent the prompt, so nothing covers this now. Readers must name the file they picked. Phase 2's `latest.json` is the only real fix; prioritise accordingly. |
 | R5 | Selected secrets on disk / in git | §9. Requires the gitignore prompt to actually land in M3, not slip. |
 | R6 | §6.1 focus behaviour differs from assumptions | Now gates M1 rather than being discovered during M2. |
 | R7 | No workspace open → feature silently does nothing | §4.2. Logged, not silent. Real gap until Phase 2's global mirror. |

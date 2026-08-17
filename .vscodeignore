@@ -20,3 +20,5 @@ dist-test/**
 .codegraph/**
 .github/**
 CHANGELOG-dev.md
+design.md
+design.v1-proposed.md
