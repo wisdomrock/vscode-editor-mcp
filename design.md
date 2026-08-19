@@ -757,7 +757,7 @@ write happens immediately on activate with `reason: "activate"`.
   - Holding an arrow key produces coalesced writes, not one per keypress.
   - A forced write failure is retried by the sink rather than left stale.
 
-### M2 — Resilience (the acceptance milestone)
+### M2 — Resilience (the acceptance milestone) — **implemented, pending manual G4 verification**
 - Active-tab fallback + carry-forward for `activeEditor`; `lastDeliberateSelection`.
 - Blur-flush; `deactivate()` flush; heartbeat writer (§8.2).
 - **AC:** select lines → click into the Claude Code chat panel → `state.json` still shows the
@@ -765,7 +765,7 @@ write happens immediately on activate with `reason: "activate"`.
   acceptance test for the entire product** (G4). Kill the extension host and confirm a reader can
   tell dead from idle via the heartbeat (G5).
 
-### M3 — Breadth, safety, ergonomics
+### M3 — Breadth, safety, ergonomics — **implemented**
 - `openTabs`, `recentFiles`, remaining events, truncation caps, `excludeGlobs`,
   `includeSelectionText`, settings, commands, gitignore prompt, status bar.
 - **AC:** selecting inside a `.env` file records the range with `text: null` and
@@ -773,7 +773,7 @@ write happens immediately on activate with `reason: "activate"`.
   (verify by watching mtime while idle); a `vitest --watch` running in the host workspace does not
   re-trigger while the user edits (R2).
 
-### M4 — Consumers, docs, publish
+### M4 — Consumers, docs, publish — **docs and skill wiring done; G6 verification and publish outstanding**
 - Insert Tier 2 into both `SKILL.md` files per §10.1; add the §10.2 read algorithm; record the
   built-in `ide` server gap.
 - `docs/state-file.md`, README, CHANGELOG; publish `wisdomrock.editor-state-mcp` 0.1.0.

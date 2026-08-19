@@ -7,16 +7,13 @@ No port, no auth token, no configuration, nothing to start.
 
 ---
 
-> ### 🚧 Pre-release — the mirror is not written yet
+> ### 🚧 Pre-release — not yet published
 >
-> This is milestone **M0** of a redesign: the old MCP server has been removed and the new
-> foundation is in place, but nothing is written to disk yet. See [design.md](design.md) for
-> the full plan and [§13](design.md) for milestones.
->
-> **Works today:** the extension activates, shows its status bar item, logs its resolved
-> configuration, and ships the `Probe Focus Behaviour` diagnostic.
-> **Not yet:** the state file itself (M1), focus-loss resilience (M2), open tabs and
-> privacy controls (M3).
+> The mirror itself, focus-loss resilience, and open tabs/privacy controls (M1–M3) are all
+> implemented and covered by the test suite below. What's left before a marketplace release
+> (M4): the design.md §6.1 focus-probe findings need a manual run, and the end-to-end
+> "`/explain-selection` with no `<ide_selection>` tag" check needs to happen in a real session.
+> See [design.md §13](design.md) for the full milestone breakdown.
 
 ---
 
@@ -82,8 +79,10 @@ Two details that make it dependable:
 Lines and columns are **1-based and inclusive**, matching grep, compilers and the `Read` tool.
 The raw 0-based VS Code values are also included, under `selection.zeroBased`.
 
-The full field reference and the normative indexing rules live in
-[design.md §5](design.md). A consumer-facing `docs/state-file.md` ships with M4.
+The full field reference, staleness rules, and focus-loss/heartbeat mechanics are in
+**[docs/state-file.md](docs/state-file.md)** — the consumer-facing doc, kept in sync with
+[`src/state/types.ts`](src/state/types.ts). The normative indexing/off-by-one rules for
+selections live in [design.md §5.4](design.md).
 
 ## Claude Code skills
 
@@ -114,10 +113,10 @@ the plugin is fine — the file is written either way, and any agent can read it
 
 | Command | What it does |
 | --- | --- |
-| `Editor State: Write Now` | Force an immediate write (M1) |
-| `Editor State: Open State File` | Open the exact file agents read (M1) |
+| `Editor State: Write Now` | Force an immediate write |
+| `Editor State: Open State File` | Open the exact file agents read |
 | `Editor State: Show Logs` | Open the extension's output channel |
-| `Editor State: Probe Focus Behaviour (diagnostic)` | Samples editor state across a focus change and writes up a report. Temporary; removed once its findings are recorded |
+| `Editor State: Probe Focus Behaviour (diagnostic)` | Samples editor state across a focus change and writes up a report for design.md §6.1. Temporary; removed once its findings are recorded |
 
 The status bar item on the right shows whether mirroring is on, and clicking it opens the
 state file.

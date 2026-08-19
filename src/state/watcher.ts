@@ -7,9 +7,8 @@ import type { SelectionKind, Snapshot, WriteReason } from './types';
 
 /**
  * Highest-priority reason wins when several events coalesce into one write
- * (design.md §6: "selectionChange beats documentEdit"). Only `selectionChange`
- * and `activeEditorChange` are ever produced in M1; the rest are wired as their
- * events land in M2/M3, kept here so the ranking doesn't get revisited per event.
+ * (design.md §6: "selectionChange beats documentEdit"). All ten reasons are
+ * produced as of M3.
  */
 const REASON_PRIORITY: Record<WriteReason, number> = {
   workspaceFoldersChange: 9,
@@ -39,7 +38,7 @@ export class StateWatcher implements vscode.Disposable {
   constructor(
     private sink: StateFileSink,
     private getConfig: () => StateConfig,
-    private meta: { extensionVersion: string; windowId: string },
+    private meta: { extensionVersion: string; windowId: string; heartbeatPath: string },
   ) {}
 
   /** Subscribes to editor events and performs the immediate `activate` write. */
@@ -50,9 +49,21 @@ export class StateWatcher implements vscode.Disposable {
         this.schedule('selectionChange');
       }),
       vscode.window.onDidChangeActiveTextEditor(() => this.schedule('activeEditorChange')),
+      // 0 debounce — flush whatever is pending immediately (§6). On blur the
+      // user is leaving, which is exactly when an agent is about to read.
+      vscode.window.onDidChangeWindowState(() => this.scheduleImmediate('windowFocus')),
+      vscode.window.tabGroups.onDidChangeTabs(() => this.schedule('tabsChange')),
+      vscode.window.tabGroups.onDidChangeTabGroups(() => this.schedule('tabsChange')),
+      vscode.workspace.onDidSaveTextDocument(() => this.schedule('documentSave')),
+      // Cheap fields only (isDirty, lineCount) — never re-reads selection text on
+      // every keystroke, and ignores edits to documents that aren't the active one.
+      vscode.workspace.onDidChangeTextDocument(e => {
+        if (e.document === vscode.window.activeTextEditor?.document) this.schedule('documentEdit');
+      }),
+      // 0 debounce — also re-resolves the sink's output path (§6).
+      vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleImmediate('workspaceFoldersChange')),
     );
-    this.pendingReason = 'activate';
-    this.performWrite();
+    this.scheduleImmediate('activate');
   }
 
   /** Forces an immediate write with the given reason, cancelling any pending debounce. Awaited by deactivate() and the manual command. */
@@ -73,9 +84,7 @@ export class StateWatcher implements vscode.Disposable {
   }
 
   private schedule(reason: WriteReason): void {
-    if (this.pendingReason === null || REASON_PRIORITY[reason] > REASON_PRIORITY[this.pendingReason]) {
-      this.pendingReason = reason;
-    }
+    this.mergeReason(reason);
 
     // Coalescing, not per-event: one shared trailing timer, reset on every call.
     clearTimeout(this.trailingTimer);
@@ -84,6 +93,18 @@ export class StateWatcher implements vscode.Disposable {
     // Started once per batch, never reset — bounds latency under sustained events.
     if (!this.maxWaitTimer) {
       this.maxWaitTimer = setTimeout(() => this.performWrite(), MAX_WAIT_MS);
+    }
+  }
+
+  /** Bypasses the debounce entirely — for events where staleness defeats the point (§6: window blur, activate). */
+  private scheduleImmediate(reason: WriteReason): void {
+    this.mergeReason(reason);
+    this.performWrite();
+  }
+
+  private mergeReason(reason: WriteReason): void {
+    if (this.pendingReason === null || REASON_PRIORITY[reason] > REASON_PRIORITY[this.pendingReason]) {
+      this.pendingReason = reason;
     }
   }
 
@@ -101,20 +122,28 @@ export class StateWatcher implements vscode.Disposable {
   }
 
   private doFlush(reason: WriteReason): Promise<void> {
+    this.inFlightFlush = this.doFlushAsync(reason).finally(() => {
+      this.inFlightFlush = null;
+    });
+    return this.inFlightFlush;
+  }
+
+  private async doFlushAsync(reason: WriteReason): Promise<void> {
     const config = this.getConfig();
-    const input = collect(reason, {
+    const input = await collect(reason, {
       extensionVersion: this.meta.extensionVersion,
       windowId: this.meta.windowId,
       maxSelectionBytes: config.maxSelectionBytes,
       includeSelectionText: config.includeSelectionText,
       selectionKind: this.lastSelectionKind,
+      heartbeatPath: this.meta.heartbeatPath,
+      prevActiveEditor: this.prevSnapshot?.activeEditor ?? null,
+      excludeGlobs: config.excludeGlobs,
+      maxOpenTabs: config.maxOpenTabs,
+      maxRecentFiles: config.maxRecentFiles,
     });
     const snapshot = buildSnapshot(input, this.prevSnapshot, Date.now());
     this.prevSnapshot = snapshot;
-
-    this.inFlightFlush = this.sink.write(snapshot).finally(() => {
-      this.inFlightFlush = null;
-    });
-    return this.inFlightFlush;
+    await this.sink.write(snapshot);
   }
 }

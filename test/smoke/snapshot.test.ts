@@ -193,6 +193,10 @@ export function run(): void {
     additionalSelections: [],
     maxSelectionBytes: 65_536,
     includeSelectionText: true,
+    excludeGlobs: [],
+    openTabs: [],
+    maxOpenTabs: 100,
+    maxRecentFiles: 25,
   };
 
   section('buildSnapshot: multi-cursor selections are each independently normalized', () => {
@@ -254,12 +258,228 @@ export function run(): void {
     eq('cursor', s.cursor, { line: 2, column: 1 });
   });
 
-  section('buildSnapshot: M1 fields not yet populated stay at their documented defaults', () => {
+  section('buildSnapshot: with no editor and no tabs, openTabs/recentFiles default to empty', () => {
     const s = buildSnapshot(baseInput, null, 1_700_000_000_000);
-    eq('lastDeliberateSelection', s.lastDeliberateSelection, null);
     eq('openTabs', s.openTabs, []);
     eq('recentFiles', s.recentFiles, []);
     eq('schemaVersion', s.schemaVersion, 1);
     eq('updatedAtMs', s.updatedAtMs, 1_700_000_000_000);
   });
+
+  const activeEditor = {
+    path: 'd:/mock/root/a.py',
+    relativePath: 'a.py',
+    scheme: 'file',
+    languageId: 'python',
+    isUntitled: false,
+    isDirty: false,
+    lineCount: 10,
+    eol: 'lf' as const,
+    viewColumn: 1,
+    source: 'activeTextEditor' as const,
+  };
+
+  section('buildSnapshot: a deliberate non-empty selection populates lastDeliberateSelection (§7 defence 2)', () => {
+    const s = buildSnapshot(
+      {
+        ...baseInput,
+        activeEditor,
+        primarySelection: raw({
+          start: { line: 3, character: 0 },
+          end: { line: 3, character: 5 },
+          isEmpty: false,
+          kind: 'mouse',
+          text: 'hello',
+        }),
+      },
+      null,
+      1_000,
+    );
+    eq('path', s.lastDeliberateSelection?.path, 'd:/mock/root/a.py');
+    eq('capturedAtMs', s.lastDeliberateSelection?.capturedAtMs, 1_000);
+    eq('startLine', s.lastDeliberateSelection?.startLine, 4);
+    eq('text', s.lastDeliberateSelection?.text, 'hello');
+  });
+
+  section('buildSnapshot: a programmatic selection does not overwrite an existing lastDeliberateSelection', () => {
+    const prev = buildSnapshot(
+      {
+        ...baseInput,
+        activeEditor,
+        primarySelection: raw({
+          start: { line: 3, character: 0 },
+          end: { line: 3, character: 5 },
+          isEmpty: false,
+          kind: 'mouse',
+          text: 'hello',
+        }),
+      },
+      null,
+      1_000,
+    );
+    const next = buildSnapshot(
+      {
+        ...baseInput,
+        activeEditor,
+        primarySelection: raw({
+          start: { line: 8, character: 0 },
+          end: { line: 8, character: 3 },
+          isEmpty: false,
+          kind: 'command', // e.g. jump-to-definition — not a deliberate gesture
+          text: 'xyz',
+        }),
+      },
+      prev,
+      2_000,
+    );
+    eq('lastDeliberateSelection is carried forward unchanged', next.lastDeliberateSelection, prev.lastDeliberateSelection);
+  });
+
+  section('buildSnapshot: a cursor click that collapses the selection does not clear lastDeliberateSelection', () => {
+    const prev = buildSnapshot(
+      {
+        ...baseInput,
+        activeEditor,
+        primarySelection: raw({
+          start: { line: 3, character: 0 },
+          end: { line: 3, character: 5 },
+          isEmpty: false,
+          kind: 'mouse',
+          text: 'hello',
+        }),
+      },
+      null,
+      1_000,
+    );
+    const next = buildSnapshot(
+      {
+        ...baseInput,
+        activeEditor,
+        primarySelection: raw({ start: { line: 5, character: 2 }, end: { line: 5, character: 2 }, isEmpty: true, kind: 'mouse' }),
+      },
+      prev,
+      2_000,
+    );
+    eq('selection is live-or-null and now empty', next.selection?.isEmpty, true);
+    eq('lastDeliberateSelection survives the empty click', next.lastDeliberateSelection, prev.lastDeliberateSelection);
+  });
+
+  section('buildSnapshot: no editor at all carries lastDeliberateSelection forward unchanged', () => {
+    const prev = buildSnapshot(
+      {
+        ...baseInput,
+        activeEditor,
+        primarySelection: raw({
+          start: { line: 3, character: 0 },
+          end: { line: 3, character: 5 },
+          isEmpty: false,
+          kind: 'mouse',
+          text: 'hello',
+        }),
+      },
+      null,
+      1_000,
+    );
+    // Carried-forward activeEditor with no live selection — the shape collect.ts
+    // produces when focus moves to a webview and no active tab resolves either.
+    const next = buildSnapshot(
+      { ...baseInput, activeEditor: { ...activeEditor, source: 'carriedForward' }, primarySelection: null },
+      prev,
+      2_000,
+    );
+    eq('selection is null', next.selection, null);
+    eq('lastDeliberateSelection survives', next.lastDeliberateSelection, prev.lastDeliberateSelection);
+  });
+
+  section('buildSnapshot: a selection inside an excluded file omits text regardless of includeSelectionText', () => {
+    const s = buildSnapshot(
+      {
+        ...baseInput,
+        activeEditor: { ...activeEditor, path: '.env', relativePath: '.env' },
+        primarySelection: raw({ start: { line: 0, character: 0 }, end: { line: 0, character: 5 }, isEmpty: false, text: 'SECRET=x' }),
+        excludeGlobs: ['**/.env'],
+        includeSelectionText: true,
+      },
+      null,
+      1_000,
+    );
+    eq('text', s.selection?.text, null);
+    eq('textOmittedReason', s.selection?.textOmittedReason, 'excluded');
+    eq('the range is still recorded', s.selection?.startLine, 1);
+  });
+
+  section('buildSnapshot: a non-excluded file with includeSelectionText false omits text without claiming exclusion', () => {
+    const s = buildSnapshot(
+      {
+        ...baseInput,
+        activeEditor,
+        primarySelection: raw({ start: { line: 0, character: 0 }, end: { line: 0, character: 3 }, isEmpty: false, text: 'abc' }),
+        excludeGlobs: ['**/.env'],
+        includeSelectionText: false,
+      },
+      null,
+      1_000,
+    );
+    eq('text', s.selection?.text, null);
+    eq('textOmittedReason', s.selection?.textOmittedReason, null);
+  });
+
+  section('buildSnapshot: recentFiles adds the active file to the front on a genuine switch', () => {
+    const first = buildSnapshot({ ...baseInput, activeEditor }, null, 1_000);
+    eq('first switch adds one entry', first.recentFiles.length, 1);
+    eq('lastActiveAtMs', first.recentFiles[0].lastActiveAtMs, 1_000);
+
+    const otherFile = { ...activeEditor, path: 'd:/mock/root/b.py', relativePath: 'b.py' };
+    const second = buildSnapshot({ ...baseInput, activeEditor: otherFile }, first, 2_000);
+    eq('new file is pushed to the front', second.recentFiles[0].path, 'd:/mock/root/b.py');
+    eq('previous file moves to second', second.recentFiles[1].path, activeEditor.path);
+  });
+
+  section('buildSnapshot: recentFiles does not bump the timestamp while the same file stays active', () => {
+    const first = buildSnapshot({ ...baseInput, activeEditor }, null, 1_000);
+    // A selectionChange write with no activeEditor switch — must not touch
+    // recentFiles, or the sink's no-op skip (R2) would be defeated.
+    const second = buildSnapshot({ ...baseInput, activeEditor, reason: 'selectionChange' }, first, 5_000);
+    eq('recentFiles content is unchanged', second.recentFiles, first.recentFiles);
+    eq('lastActiveAtMs did not advance', second.recentFiles[0].lastActiveAtMs, 1_000);
+  });
+
+  section('buildSnapshot: recentFiles drops the oldest once over maxRecentFiles', () => {
+    let snap = buildSnapshot({ ...baseInput, activeEditor, maxRecentFiles: 2 }, null, 1_000);
+    for (let i = 0; i < 3; i++) {
+      const editorN = { ...activeEditor, path: `d:/mock/root/f${i}.py`, relativePath: `f${i}.py` };
+      snap = buildSnapshot({ ...baseInput, activeEditor: editorN, maxRecentFiles: 2 }, snap, 2_000 + i);
+    }
+    eq('capped at maxRecentFiles', snap.recentFiles.length, 2);
+    eq('capped flag set', snap.truncation.recentFilesCapped, true);
+    eq('most recent survives', snap.recentFiles[0].path, 'd:/mock/root/f2.py');
+  });
+
+  section('buildSnapshot: openTabs under the cap is left untouched', () => {
+    const tabs = [tab('a.py', true), tab('b.py', false)];
+    const s = buildSnapshot({ ...baseInput, openTabs: tabs, maxOpenTabs: 100 }, null, 1_000);
+    eq('all tabs kept', s.openTabs.length, 2);
+    eq('not capped', s.truncation.openTabsCapped, false);
+  });
+
+  section('buildSnapshot: openTabs over the cap keeps the active tab even outside the first N', () => {
+    const tabs = [tab('a.py', false), tab('b.py', false), tab('c.py', true)];
+    const s = buildSnapshot({ ...baseInput, openTabs: tabs, maxOpenTabs: 2 }, null, 1_000);
+    eq('capped to maxOpenTabs', s.openTabs.length, 2);
+    eq('capped flag set', s.truncation.openTabsCapped, true);
+    eq('active tab survives the cap', s.openTabs.some(t => t.isActive), true);
+  });
+}
+
+function tab(name: string, isActive: boolean) {
+  return {
+    relativePath: name,
+    path: `d:/mock/root/${name}`,
+    scheme: 'file',
+    kind: 'text' as const,
+    isActive,
+    isDirty: false,
+    isPinned: false,
+    groupId: 1,
+  };
 }

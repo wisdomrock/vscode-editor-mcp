@@ -3,20 +3,22 @@ import * as vscode from 'vscode';
 import { CONFIG_SECTION, needsSinkReset, readConfig, type StateConfig } from './config';
 import { initLog, log } from './log';
 import { runFocusProbe } from './probe';
+import { maybePromptGitignore } from './state/gitignore';
+import { HeartbeatWriter, pruneDeadHeartbeats } from './state/heartbeat';
 import { StateFileSink } from './state/sink';
 import { StateWatcher } from './state/watcher';
 import { createStatusBar, type MirrorStatus, type StatusBarHandle } from './statusBar';
 
 /**
- * M1: the extension mirrors selection + active-editor state into `config.path`
- * on every relevant event, debounced and coalesced (design.md §6, §8). The
- * §7 focus-loss defences (active-tab fallback, carried-forward activeEditor,
- * lastDeliberateSelection) and the heartbeat land in M2.
+ * M3: `openTabs`, `recentFiles`, the remaining §6 events, `excludeGlobs`,
+ * truncation caps, the one-time gitignore prompt, and a status bar that stays
+ * live across background writes rather than only updating on explicit triggers.
  */
 
 let statusBar: StatusBarHandle | undefined;
 let sink: StateFileSink | undefined;
 let watcher: StateWatcher | undefined;
+let heartbeat: HeartbeatWriter | undefined;
 let config: StateConfig;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -36,9 +38,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     getEnabled: () => config.enabled,
     getConfiguredPath: () => config.path,
     getWorkspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    onFirstSuccessfulWrite: (root, configuredPath) => {
+      if (!config.autoGitignore) return;
+      void maybePromptGitignore(root, configuredPath, context.workspaceState);
+    },
+    onStatusChange: () => statusBar?.update(currentStatus()),
   });
-  watcher = new StateWatcher(sink, () => config, { extensionVersion: version, windowId });
+  heartbeat = new HeartbeatWriter(
+    windowId,
+    () => config.heartbeatMs,
+    () => config.enabled,
+    () => sink?.currentPath(),
+  );
+  watcher = new StateWatcher(sink, () => config, { extensionVersion: version, windowId, heartbeatPath: heartbeat.path() });
   context.subscriptions.push(sink, watcher);
+
+  // Best-effort hygiene: clears heartbeat files left by hosts that crashed
+  // without deactivating, regardless of whether this window ends up enabled.
+  void pruneDeadHeartbeats();
+  heartbeat.sync();
 
   context.subscriptions.push(
     vscode.commands.registerCommand('editorStateMcp.writeNow', async () => {
@@ -73,6 +91,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         log.info(`Sink config changed (enabled=${next.enabled}, path=${next.path})`);
         if (!next.enabled) void sink?.removeFile();
       }
+      heartbeat?.sync();
       statusBar?.update(currentStatus());
     }),
   );
@@ -87,9 +106,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export async function deactivate(): Promise<void> {
   await watcher?.flush('shutdown');
+  // §8.2: the heartbeat's entire meaning is "this host is alive" — always
+  // remove it, even if mirroring itself is currently disabled.
+  await heartbeat?.dispose();
   statusBar = undefined;
   sink = undefined;
   watcher = undefined;
+  heartbeat = undefined;
 }
 
 function currentStatus(): MirrorStatus {

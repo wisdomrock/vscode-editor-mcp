@@ -1,8 +1,8 @@
 /**
  * The output contract (design.md §5). Plain data only — nothing here may import
- * `vscode`. This is the source of truth for docs/state-file.md (§10.3, not yet
- * written) and for `snapshot.ts`, which is pure specifically so these shapes can
- * be unit-tested without an extension host.
+ * `vscode`. This is the source of truth for docs/state-file.md (§10.3) and for
+ * `snapshot.ts`, which is pure specifically so these shapes can be unit-tested
+ * without an extension host.
  */
 
 /** Bump on any breaking change. Additive changes only within a major (§5.2, R9). */
@@ -22,7 +22,7 @@ export type WriteReason =
 
 export type SelectionKind = 'keyboard' | 'mouse' | 'command' | null;
 
-/** M1 only ever produces `activeTextEditor` or `null` — §7's fallback/carry-forward land in M2. */
+/** `activeTab`/`carriedForward` are the §7 defence-1 fallback chain: focused editor, else the active tab, else the last known editor carried forward. */
 export type ActiveEditorSource = 'activeTextEditor' | 'activeTab' | 'carriedForward';
 
 export interface ZeroBasedRange {
@@ -75,7 +75,9 @@ export interface ActiveEditorSnapshot {
 
 export interface OpenTabSnapshot {
   relativePath: string | null;
-  path: string;
+  /** Null for non-URI tab kinds (e.g. an extension-contributed webview tab) — `scheme`/`kind` still identify it. */
+  path: string | null;
+  scheme: string | null;
   kind: 'text' | 'diff' | 'notebook' | 'custom' | 'other';
   isActive: boolean;
   isDirty: boolean;
@@ -100,7 +102,7 @@ export interface Snapshot {
     pid: number;
     focused: boolean;
     vscodeVersion: string;
-    /** Null until the heartbeat writer lands in M2 (§8.2). */
+    /** Absolute path to this window's heartbeat file (§8.2), regardless of whether heartbeats are currently enabled. */
     heartbeatPath: string | null;
   };
   workspace: {
@@ -112,11 +114,8 @@ export interface Snapshot {
   selection: NormalizedSelection | null;
   additionalSelections: NormalizedSelection[];
   cursor: { line: number; column: number } | null;
-  /** Always null in M1 — carry-forward across focus loss is M2 (§7). */
   lastDeliberateSelection: LastDeliberateSelection | null;
-  /** Always [] in M1 — populated in M3 (§13). */
   openTabs: OpenTabSnapshot[];
-  /** Always [] in M1 — populated in M3 (§13). */
   recentFiles: RecentFileSnapshot[];
   truncation: { openTabsCapped: boolean; recentFilesCapped: boolean };
 }
@@ -162,4 +161,9 @@ export interface SnapshotInput {
   additionalSelections: RawSelection[];
   maxSelectionBytes: number;
   includeSelectionText: boolean;
+  excludeGlobs: string[];
+  /** Unclamped — `buildSnapshot` applies `maxOpenTabs` and sets `truncation.openTabsCapped`. */
+  openTabs: OpenTabSnapshot[];
+  maxOpenTabs: number;
+  maxRecentFiles: number;
 }

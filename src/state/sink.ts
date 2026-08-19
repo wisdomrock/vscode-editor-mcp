@@ -13,6 +13,10 @@ export interface StateFileSinkOptions {
   /** Absolute, or relative to `getWorkspaceRoot()`. Read fresh on every write so a config change applies without restart. */
   getConfiguredPath: () => string;
   getWorkspaceRoot: () => string | undefined;
+  /** Fired once, after the first successful write of this activation (§4.3 — the gitignore prompt trigger). */
+  onFirstSuccessfulWrite?: (root: string, configuredPath: string) => void;
+  /** Fired after every write attempt that changes `writes`/`lastError`, so a status bar can stay live. */
+  onStatusChange?: () => void;
 }
 
 /**
@@ -29,6 +33,7 @@ export class StateFileSink {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private retryCount = 0;
   private loggedNoWorkspace = false;
+  private notifiedFirstWrite = false;
 
   writes = 0;
   lastWriteMs: number | undefined;
@@ -98,10 +103,16 @@ export class StateFileSink {
       this.lastError = undefined;
       this.retryCount = 0;
       clearTimeout(this.retryTimer);
+      if (!this.notifiedFirstWrite) {
+        this.notifiedFirstWrite = true;
+        this.opts.onFirstSuccessfulWrite?.(root, this.opts.getConfiguredPath());
+      }
+      this.opts.onStatusChange?.();
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       log.warn(`Failed to write state file: ${this.lastError}`);
       this.scheduleRetry(snapshot);
+      this.opts.onStatusChange?.();
     }
   }
 
