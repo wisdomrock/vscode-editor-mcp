@@ -1,0 +1,12 @@
+{
+  "name": "editor-state-mcp",
+  "owner": {
+    "name": "wisdomrock"
+  },
+  "plugins": [
+    {
+      "name": "editor-state",
+      "source": "./"
+    }
+  ]
+}

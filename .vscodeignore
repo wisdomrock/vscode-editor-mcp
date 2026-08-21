@@ -1,5 +1,7 @@
 .vscode/**
 .vscode-test/**
+.idea/**
+.editor-state/**
 src/**
 node_modules/**
 out/**
@@ -20,3 +22,7 @@ dist-test/**
 .codegraph/**
 .github/**
 CHANGELOG-dev.md
+design.md
+design.v1-proposed.md
+skills/**
+.claude-plugin/**

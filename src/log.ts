@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 let channel: vscode.LogOutputChannel | undefined;
 
 export function initLog(): vscode.LogOutputChannel {
-  channel ??= vscode.window.createOutputChannel('Editor MCP', { log: true });
+  channel ??= vscode.window.createOutputChannel('Editor State', { log: true });
   return channel;
 }
 

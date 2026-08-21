@@ -1,102 +1,169 @@
-# Editor MCP Server
+# Editor State
 
-Exposes your live VS Code editor state to any MCP client — Claude Code, custom agents,
-or VS Code's own Copilot agent mode.
+Mirrors your live VS Code editor state — active file, selection, cursor, open tabs — into a
+small gitignored JSON file, so an AI coding agent can always find out what you're looking at.
 
-VS Code can *consume* MCP servers, but it doesn't *publish* one. This extension adds
-that side: a Model Context Protocol server running inside the extension host, listening
-on loopback, with tools backed by the real `vscode` API.
+No port, no auth token, no configuration, nothing to start.
 
-Agents get the buffers you're actually looking at — including unsaved changes, your
-current selection, and language-server diagnostics — instead of re-reading files from disk.
+## Why
 
-## Tools
+A skill or agent that wants to act on "the code I'm looking at right now" has no reliable
+way to get it:
 
-| Tool | What it does |
-| --- | --- |
-| `get_active_file` | Focused file: path, language, dirty state, content or line window |
-| `get_selection` | Selected text and range, including multi-cursor |
-| `get_open_tabs` | Every tab across all editor groups, with kind and dirty state |
-| `get_diagnostics` | Errors and warnings from the language server, per file or workspace |
-| `get_workspace_folders` | Roots open in this window |
-| `create_file` | Create a file with content |
-| `edit_file` | `replace_text`, `replace_range`, `insert` or `overwrite` |
-| `open_file` | Open and reveal a file, optionally selecting a range |
-| `save_file` | Flush a buffer to disk |
-| `close_file` | Close tabs, refusing to discard unsaved work by default |
+- The **`<ide_selection>` tag** Claude Code attaches to a prompt is a one-shot push at send
+  time. It is not re-sent on later messages, so if a skill is invoked on a message where the
+  tag didn't fire, the selection is simply gone.
+- Claude Code's **built-in `ide` MCP server** exposes only `getDiagnostics` and `executeCode`
+  — there is no selection or active-file tool.
+- **Hooks** run outside the extension host with no `vscode` API access.
 
-Lines and columns are 1-based. Paths may be absolute or workspace-relative.
+Reading a JSON file, on the other hand, is something every agent can do in every session with
+zero setup. So the extension writes the state out and gets out of the way.
 
-## Getting started
 
-1. Run **Editor MCP: Start Server** from the Command Palette.
-2. Click the `$(broadcast) MCP` status bar item → **Copy "claude mcp add" command**.
-3. Paste it into a terminal.
+## How it works
+
+The extension subscribes to editor events, coalesces them behind a short debounce, and writes:
 
 ```
-claude mcp add --transport http vscode-myproject http://127.0.0.1:54321/mcp \
-  --header "Authorization: Bearer <token>"
+<workspace root>/.editor-state/state.json
 ```
 
-The status bar shows the port and how many clients are attached.
+Reading it is the entire integration:
 
-## Multiple windows
-
-Each VS Code window runs its own server on its own OS-assigned port, because "the active
-file" only means something per window. On start, each window writes a discovery file to
-`~/.vscode-editor-mcp/<pid>.json`:
-
-```json
+```jsonc
 {
-  "url": "http://127.0.0.1:54321/mcp",
-  "token": "…",
-  "workspaceFolders": ["/home/you/project"],
-  "pid": 4242
+  "schemaVersion": 1,
+  "updatedAtMs": 1786969323512,       // how stale am I?
+  "activeEditor": {
+    "relativePath": "session1/Hello.py",
+    "languageId": "python",
+    "isDirty": false
+  },
+  "selection": {                       // live, or null — never stale
+    "startLine": 4, "startColumn": 1,
+    "endLine": 4,   "endColumn": 20,
+    "text": "print(dir(my_lsit))"
+  },
+  "lastDeliberateSelection": { ... },  // survives clicking into a chat panel
+  "recentFiles": [ ... ]
 }
 ```
 
-Clients that want to auto-attach should match their working directory against
-`workspaceFolders`. Stale files from crashed hosts are pruned on next start.
+Two details that make it dependable:
 
-## Security
+- **Writes are atomic.** Write-to-temp then rename, so a reader sees either the previous
+  complete file or the new one — never a partial document. Verified across 214,979 reads
+  racing 1,000 writes.
+- **`selection` is live-or-null; `lastDeliberateSelection` is the fallback.** Clicking from
+  the editor into a chat panel doesn't wipe your selection — the exact failure mode that
+  breaks the `<ide_selection>` tag.
 
-This extension opens a local port that can read and write your files. It is built to be
-boring about that:
+Lines and columns are **1-based and inclusive**, matching grep, compilers and the `Read` tool.
+The raw 0-based VS Code values are also included, under `selection.zeroBased`.
 
-- **Loopback only.** Binding a non-loopback address is not supported, not just discouraged.
-- **Bearer token** regenerated on every start, written to the discovery file with `0600`.
-- **Origin and Host validation** on every request, so a web page in your browser cannot
-  reach the server via DNS rebinding.
-- **Edits go through the undo stack** and stay unsaved unless a tool is asked to save, so
-  you can see and revert anything an agent did.
-- **Off by default.** The server does not start until you start it, unless you enable
-  `vscodeEditorMcp.autoStart`.
+The full field reference, staleness rules, and focus-loss/heartbeat mechanics are in
+**[docs/state-file.md](docs/state-file.md)** — the consumer-facing doc, kept in sync with
+[`src/state/types.ts`](src/state/types.ts). The normative indexing/off-by-one rules for
+selections live in [design.md §5.4](design.md).
 
-Set `vscodeEditorMcp.allowWrite` to `false` to remove the mutating tools entirely — they
-are not registered, so they don't appear in the client's tool list at all.
+## Claude Code skills
+
+The extension writes the file; skills consume it. Two are bundled in this repo as a Claude Code
+plugin, so they can be installed with the same version as the extension:
+
+A companion set of "pair agent" skills, built to work alongside the state file this extension
+writes, is maintained separately at [wisdomrock/agent_work](https://github.com/wisdomrock/agent_work).
+Download it directly, or install it as a Claude Code plugin:
+
+```bash
+claude plugin marketplace add https://github.com/wisdomrock/agent_work
+claude plugin install explain-tools@wisdom-rock-marketplace
+```
+
+| Skill | What it does |
+| --- | --- |
+| `/explain-selection` | Explains the lines you have selected, in the context of the surrounding file |
+| `/explain-file` | Writes a line-by-line explanation of the active file to a `.$.md` beside it |
+
+Both resolve their target by reading `.editor-state/state.json` first, and deliberately **ignore**
+the IDE selection tags the harness attaches to a message. Those tags are one-shot change events —
+they fire when the selection changes and are not resent while it stays highlighted — so a skill that
+reads them behaves differently depending on which message it was invoked from. Reading the state
+file instead is what makes the result deterministic.
+
+They are **not** part of the `.vsix`: VS Code extensions and Claude Code plugins are separate
+mechanisms, and Claude Code does not scan `~/.vscode/extensions/`. Installing the extension without
+the plugin is fine — the file is written either way, and any agent can read it.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `Editor State: Write Now` | Force an immediate write |
+| `Editor State: Open State File` | Open the exact file agents read |
+| `Editor State: Show Logs` | Open the extension's output channel |
+| `Editor State: Probe Focus Behaviour (diagnostic)` | Samples editor state across a focus change and writes up a report for design.md §6.1. Temporary; removed once its findings are recorded |
+
+The status bar item on the right shows whether mirroring is on, and clicking it opens the
+state file.
 
 ## Settings
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `vscodeEditorMcp.autoStart` | `false` | Start on window open |
-| `vscodeEditorMcp.port` | `0` | `0` auto-assigns; required for multi-window |
-| `vscodeEditorMcp.host` | `127.0.0.1` | Loopback interface |
-| `vscodeEditorMcp.allowWrite` | `true` | Register mutating tools |
-| `vscodeEditorMcp.requireAuth` | `true` | Require a bearer token |
-| `vscodeEditorMcp.maxFileBytes` | `1048576` | Cap on returned content |
-| `vscodeEditorMcp.sessionIdleMinutes` | `30` | Reap sessions with no activity |
-| `vscodeEditorMcp.registerWithCopilot` | `true` | Advertise to VS Code's MCP client |
-| `vscodeEditorMcp.discoveryDir` | `~/.vscode-editor-mcp` | Where discovery files go |
+| `editorStateMcp.enabled` | `true` | Mirror editor state. On by default: one local file, no network port |
+| `editorStateMcp.path` | `.editor-state/state.json` | Relative to the first workspace folder; absolute paths used verbatim |
+| `editorStateMcp.debounceMs` | `150` | Coalescing window; selection fires on every arrow key |
+| `editorStateMcp.includeSelectionText` | `true` | Include selected text, not just its range |
+| `editorStateMcp.maxSelectionBytes` | `65536` | Clip longer selections; the range is never dropped |
+| `editorStateMcp.excludeGlobs` | `.env`, `*.pem`, `*.key`, … | Never copy contents of these files; path and range still recorded |
+| `editorStateMcp.maxOpenTabs` | `100` | Cap on recorded tabs; the active tab is always kept |
+| `editorStateMcp.maxRecentFiles` | `25` | Cap on the MRU list |
+| `editorStateMcp.autoGitignore` | `true` | Offer once, per workspace, to add `.editor-state/` to `.gitignore` |
+| `editorStateMcp.heartbeatSeconds` | `30` | Liveness file, so a reader can tell "idle" from "VS Code died". `0` disables |
+| `editorStateMcp.globalMirror` | `false` | Also mirror to `~/.editor-state-mcp/`. Not yet implemented |
+
+## Privacy
+
+The state file contains **source text you selected**, in plaintext, inside your workspace.
+
+- Written with mode `0600`.
+- The extension offers once, per workspace, to add `.editor-state/` to your `.gitignore`. It
+  never edits a tracked file without asking, and never creates a `.gitignore` that isn't there.
+- `excludeGlobs` keeps contents of sensitive files out entirely — the path and line range are
+  still recorded, but the text is omitted. The path isn't secret; the contents may be.
+- `includeSelectionText: false` disables text capture completely while keeping ranges. A reader
+  can still open the file itself, so this costs very little.
+- Setting `enabled: false` removes the state and heartbeat files, so opting out is complete.
+
+The heartbeat is deliberately written **outside** your workspace, to
+`~/.editor-state-mcp/heartbeat/`. A fixed-interval write inside the project tree would
+re-trigger your own `tsc --watch` or test runner on a timer.
+
+## Known limitations
+
+- **No folder open → nothing is written.** The extension will not write next to an arbitrary
+  loose file. The opt-in global mirror addresses this later.
+- **Two windows on one workspace share one file**, last writer wins. Both `window.id` and
+  `window.focused` are recorded so a reader can detect it.
+- **Windows write contention.** Node opens files without `FILE_SHARE_DELETE`, so a reader can
+  block a rename. Writes retry with jittered backoff and the occasional drop is re-scheduled;
+  `updatedAtMs` always tells you how fresh the file really is.
 
 ## Development
 
 ```bash
 npm install
-npm run watch     # then press F5 to launch an Extension Development Host
-npm run smoke     # transport, auth and tool-registration checks (no editor needed)
-npm run package   # build a .vsix
+npm run watch         # then press F5 for an Extension Development Host
+npm run check-types   # tsc --noEmit
+npm test              # atomic-write guarantees; no editor needed
+npm run package       # build a .vsix
 ```
+
+The correctness-critical code is deliberately `vscode`-free — `buildSnapshot` is a pure
+function and `atomicWrite` is plain Node — so the tests that matter run without an extension
+host. The extension has **zero runtime dependencies**.
 
 ## License
 

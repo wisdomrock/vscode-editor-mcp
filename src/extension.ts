@@ -1,181 +1,124 @@
+import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
-import { CONFIG_SECTION, needsRestart, readConfig, type McpConfig } from './config';
-import { registerCopilotProvider } from './copilot';
+import { CONFIG_SECTION, needsSinkReset, readConfig, type StateConfig } from './config';
 import { initLog, log } from './log';
-import { ServerController } from './server/controller';
-import { createStatusBar } from './statusBar';
+import { runFocusProbe } from './probe';
+import { maybePromptGitignore } from './state/gitignore';
+import { HeartbeatWriter, pruneDeadHeartbeats } from './state/heartbeat';
+import { StateFileSink } from './state/sink';
+import { StateWatcher } from './state/watcher';
+import { createStatusBar, type MirrorStatus, type StatusBarHandle } from './statusBar';
 
-let controller: ServerController | undefined;
+/**
+ * M3: `openTabs`, `recentFiles`, the remaining §6 events, `excludeGlobs`,
+ * truncation caps, the one-time gitignore prompt, and a status bar that stays
+ * live across background writes rather than only updating on explicit triggers.
+ */
+
+let statusBar: StatusBarHandle | undefined;
+let sink: StateFileSink | undefined;
+let watcher: StateWatcher | undefined;
+let heartbeat: HeartbeatWriter | undefined;
+let config: StateConfig;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   context.subscriptions.push(initLog());
 
   const version = context.extension.packageJSON.version as string;
-  controller = new ServerController(version);
-  context.subscriptions.push(controller);
-  context.subscriptions.push(createStatusBar(controller));
+  config = readConfig();
 
-  let config = readConfig();
-  if (config.registerWithCopilot) {
-    context.subscriptions.push(registerCopilotProvider(controller));
-  }
+  statusBar = createStatusBar();
+  context.subscriptions.push(statusBar);
+
+  // Stable per extension-host process (design.md §5.2): pid alone is reused by
+  // the OS across restarts, so mix in activation time.
+  const windowId = crypto.createHash('md5').update(`${process.pid}-${Date.now()}`).digest('hex').slice(0, 8);
+
+  sink = new StateFileSink({
+    getEnabled: () => config.enabled,
+    getConfiguredPath: () => config.path,
+    getWorkspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    onFirstSuccessfulWrite: (root, configuredPath) => {
+      if (!config.autoGitignore) return;
+      void maybePromptGitignore(root, configuredPath, context.workspaceState);
+    },
+    onStatusChange: () => statusBar?.update(currentStatus()),
+  });
+  heartbeat = new HeartbeatWriter(
+    windowId,
+    () => config.heartbeatMs,
+    () => config.enabled,
+    () => sink?.currentPath(),
+  );
+  watcher = new StateWatcher(sink, () => config, { extensionVersion: version, windowId, heartbeatPath: heartbeat.path() });
+  context.subscriptions.push(sink, watcher);
+
+  // Best-effort hygiene: clears heartbeat files left by hosts that crashed
+  // without deactivating, regardless of whether this window ends up enabled.
+  void pruneDeadHeartbeats();
+  heartbeat.sync();
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('vscodeEditorMcp.start', () => startWithFeedback()),
-    vscode.commands.registerCommand('vscodeEditorMcp.stop', async () => {
-      await controller?.stop();
-      vscode.window.setStatusBarMessage('Editor MCP: stopped', 3000);
+    vscode.commands.registerCommand('editorStateMcp.writeNow', async () => {
+      await watcher?.flush('manual');
+      statusBar?.update(currentStatus());
+      vscode.window.showInformationMessage('Editor State: wrote the current state file.');
     }),
-    vscode.commands.registerCommand('vscodeEditorMcp.restart', async () => {
-      await controller?.restart();
-      vscode.window.setStatusBarMessage('Editor MCP: restarted', 3000);
+    vscode.commands.registerCommand('editorStateMcp.openStateFile', async () => {
+      const path = sink?.currentPath();
+      if (!path) {
+        vscode.window.showInformationMessage('Editor State: nothing written yet.');
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
+      await vscode.window.showTextDocument(doc, { preview: false });
     }),
-    vscode.commands.registerCommand('vscodeEditorMcp.status', () => showStatusMenu()),
-    vscode.commands.registerCommand('vscodeEditorMcp.copyUrl', () => copyUrl()),
-    vscode.commands.registerCommand('vscodeEditorMcp.copyClaudeCommand', () => copyClaudeCommand()),
-    vscode.commands.registerCommand('vscodeEditorMcp.showLogs', () => log.show()),
+    vscode.commands.registerCommand('editorStateMcp.showLogs', () => log.show()),
+    vscode.commands.registerCommand('editorStateMcp.probeFocus', () => runFocusProbe()),
   );
 
   context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration(async e => {
+    vscode.workspace.onDidChangeConfiguration(e => {
       if (!e.affectsConfiguration(CONFIG_SECTION)) return;
       const next = readConfig();
       const previous = config;
       config = next;
 
-      if (controller?.status.state === 'running' && needsRestart(previous, next)) {
-        log.info('Settings changed; restarting server');
-        await controller.restart();
+      // No listener, no session, nothing to restart — the sharpest contrast with
+      // the 0.1.x server this replaces. A path or enablement change only has to
+      // reset the sink; everything else applies on the next write.
+      if (needsSinkReset(previous, next)) {
+        log.info(`Sink config changed (enabled=${next.enabled}, path=${next.path})`);
+        if (!next.enabled) void sink?.removeFile();
       }
+      heartbeat?.sync();
+      statusBar?.update(currentStatus());
     }),
   );
 
-  if (config.autoStart) {
-    log.info('autoStart enabled; starting server');
-    await startWithFeedback({ silent: true });
-  }
+  watcher.start();
+  statusBar.update(currentStatus());
+  log.info(
+    `editor-state-mcp ${version} activated — enabled=${config.enabled}, path=${config.path}, ` +
+      `debounce=${config.debounceMs}ms, heartbeat=${config.heartbeatMs}ms`,
+  );
 }
 
 export async function deactivate(): Promise<void> {
-  // Awaited here (unlike in dispose) so the discovery file is gone before the
-  // extension host exits, rather than left for the next window to prune.
-  await controller?.stop();
-  controller = undefined;
+  await watcher?.flush('shutdown');
+  // §8.2: the heartbeat's entire meaning is "this host is alive" — always
+  // remove it, even if mirroring itself is currently disabled.
+  await heartbeat?.dispose();
+  statusBar = undefined;
+  sink = undefined;
+  watcher = undefined;
+  heartbeat = undefined;
 }
 
-async function startWithFeedback(opts: { silent?: boolean } = {}): Promise<void> {
-  try {
-    await controller?.start();
-    const address = controller?.status.address;
-    if (address && !opts.silent) {
-      const choice = await vscode.window.showInformationMessage(
-        `Editor MCP listening on ${address.url}`,
-        'Copy claude mcp add',
-        'Copy URL',
-      );
-      if (choice === 'Copy claude mcp add') await copyClaudeCommand();
-      if (choice === 'Copy URL') await copyUrl();
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const choice = await vscode.window.showErrorMessage(`Editor MCP failed to start: ${message}`, 'Show Logs');
-    if (choice === 'Show Logs') log.show();
-  }
+function currentStatus(): MirrorStatus {
+  if (!config.enabled) return { state: 'disabled', writes: 0 };
+  if (!vscode.workspace.workspaceFolders?.length) return { state: 'noWorkspace', writes: 0 };
+  if (sink?.lastError) return { state: 'error', writes: sink.writes, error: sink.lastError, path: sink.currentPath() };
+  if (!sink?.writes) return { state: 'idle', writes: 0, path: sink?.currentPath() };
+  return { state: 'active', writes: sink.writes, path: sink.currentPath(), lastWriteMs: sink.lastWriteMs };
 }
-
-async function showStatusMenu(): Promise<void> {
-  const status = controller?.status;
-  if (!status) return;
-
-  if (status.state !== 'running') {
-    const choice = await vscode.window.showQuickPick(
-      [
-        { label: '$(play) Start server', action: 'start' },
-        { label: '$(output) Show logs', action: 'logs' },
-        { label: '$(gear) Open settings', action: 'settings' },
-      ],
-      { title: status.state === 'error' ? `Editor MCP: ${status.error}` : 'Editor MCP: stopped' },
-    );
-    if (choice?.action === 'start') await startWithFeedback();
-    if (choice?.action === 'logs') log.show();
-    if (choice?.action === 'settings') await openSettings();
-    return;
-  }
-
-  const choice = await vscode.window.showQuickPick(
-    [
-      { label: '$(clippy) Copy "claude mcp add" command', action: 'claude' },
-      { label: '$(link) Copy server URL', action: 'url' },
-      { label: '$(debug-restart) Restart server', action: 'restart' },
-      { label: '$(primitive-square) Stop server', action: 'stop' },
-      { label: '$(output) Show logs', action: 'logs' },
-      { label: '$(gear) Open settings', action: 'settings' },
-    ],
-    {
-      title: `Editor MCP · ${status.address?.url} · ${status.sessions} client${status.sessions === 1 ? '' : 's'}`,
-    },
-  );
-
-  switch (choice?.action) {
-    case 'claude':
-      await copyClaudeCommand();
-      break;
-    case 'url':
-      await copyUrl();
-      break;
-    case 'restart':
-      await controller?.restart();
-      break;
-    case 'stop':
-      await controller?.stop();
-      break;
-    case 'logs':
-      log.show();
-      break;
-    case 'settings':
-      await openSettings();
-      break;
-  }
-}
-
-async function copyUrl(): Promise<void> {
-  const address = controller?.status.address;
-  if (!address) {
-    vscode.window.showWarningMessage('Editor MCP is not running.');
-    return;
-  }
-  await vscode.env.clipboard.writeText(address.url);
-  vscode.window.setStatusBarMessage('Editor MCP: URL copied', 3000);
-}
-
-async function copyClaudeCommand(): Promise<void> {
-  const address = controller?.status.address;
-  if (!address) {
-    vscode.window.showWarningMessage('Editor MCP is not running.');
-    return;
-  }
-
-  const name = safeServerName(vscode.workspace.name);
-  const header = address.token ? ` --header "Authorization: Bearer ${address.token}"` : '';
-  await vscode.env.clipboard.writeText(`claude mcp add --transport http ${name} ${address.url}${header}`);
-
-  vscode.window.showInformationMessage(
-    address.token
-      ? 'Copied. The command contains this session\'s auth token — it changes every restart.'
-      : 'Copied. Auth is disabled, so any local process can reach this server.',
-  );
-}
-
-function safeServerName(workspaceName: string | undefined): string {
-  const slug = (workspaceName ?? 'vscode')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return slug ? `vscode-${slug}` : 'vscode-editor';
-}
-
-function openSettings(): Thenable<unknown> {
-  return vscode.commands.executeCommand('workbench.action.openSettings', CONFIG_SECTION);
-}
-
-export type { McpConfig };
