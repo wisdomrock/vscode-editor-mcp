@@ -5,3 +5,4 @@ out/
 .vscode-test/
 dist-test/
 .serena/
+.editor-state/

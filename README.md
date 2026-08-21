@@ -109,6 +109,17 @@ They are **not** part of the `.vsix`: VS Code extensions and Claude Code plugins
 mechanisms, and Claude Code does not scan `~/.vscode/extensions/`. Installing the extension without
 the plugin is fine — the file is written either way, and any agent can read it.
 
+### Pair agent skills
+
+A companion set of "pair agent" skills, built to work alongside the state file this extension
+writes, is maintained separately at [wisdomrock/agent_work](https://github.com/wisdomrock/agent_work).
+Download it directly, or install it as a Claude Code plugin:
+
+```claude code commands
+/plugin marketplace add https://github.com/wisdomrock/agent_work
+/plugin install explain-tools@wisdom-rock-marketplace
+```
+
 ## Commands
 
 | Command | What it does |
