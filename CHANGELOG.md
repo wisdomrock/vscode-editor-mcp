@@ -1,6 +1,12 @@
 # Changelog
 
-## [0.1.0] — `editor-state-mcp` (unreleased)
+## [0.1.1] — `editor-state-mcp`
+
+- Packaging fix: `.editor-state/state.json` was being bundled into the `.vsix` (it was
+  gitignored but not vscodeignored). Excluded it via `.vscodeignore` so published packages never
+  ship a snapshot of the packager's local editor state.
+
+## [0.1.0] — `editor-state-mcp`
 
 Ground-up redesign, published under a new extension id — not an upgrade of `editor-mcp-server`
 0.1.1 below. The loopback HTTP MCP server is gone; in its place, the extension continuously
