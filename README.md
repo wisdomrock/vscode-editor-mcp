@@ -95,8 +95,8 @@ plugin, so they can be installed with the same version as the extension:
 | `/explain-file` | Writes a line-by-line explanation of the active file to a `.$.md` beside it |
 
 ```bash
-claude plugin marketplace add wisdomrock/editor-state-mcp
-claude plugin install editor-state@editor-state-mcp
+claude plugin marketplace add https://github.com/wisdomrock/agent_work
+claude plugin install explain-tools@wisdom-rock-marketplace
 ```
 
 Both resolve their target by reading `.editor-state/state.json` first, and deliberately **ignore**

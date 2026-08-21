@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.2] — `editor-state-mcp`
+
+- README: fixed the Claude Code plugin install commands, which pointed at the wrong marketplace
+  repo and plugin name.
+
 ## [0.1.1] — `editor-state-mcp`
 
 - Packaging fix: `.editor-state/state.json` was being bundled into the `.vsix` (it was
