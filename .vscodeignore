@@ -1,5 +1,6 @@
 .vscode/**
 .vscode-test/**
+.editor-state/**
 src/**
 node_modules/**
 out/**
