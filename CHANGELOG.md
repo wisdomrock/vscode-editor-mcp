@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.4] — `editor-state-mcp`
+
+- Fixed `.claude-plugin/marketplace.json`: plugins were nested under a `"marketplaces": [...]`
+  array instead of the required top-level `name`/`owner`/`plugins` shape, so `claude plugin
+  marketplace add` failed schema validation.
+- README: further edits to the skills sections.
+
+## [0.1.3] — `editor-state-mcp`
+
+- README: fixed the bundled-skills install commands, which had been overwritten to point at the
+  separate `agent_work` companion repo instead of this repo's own plugin marketplace
+  (`editor-state-mcp` / `editor-state`), duplicating the "Pair agent skills" section below it.
+
 ## [0.1.2] — `editor-state-mcp`
 
 - README: fixed the Claude Code plugin install commands, which pointed at the wrong marketplace

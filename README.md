@@ -5,18 +5,6 @@ small gitignored JSON file, so an AI coding agent can always find out what you'r
 
 No port, no auth token, no configuration, nothing to start.
 
----
-
-> ### 🚧 Pre-release — not yet published
->
-> The mirror itself, focus-loss resilience, and open tabs/privacy controls (M1–M3) are all
-> implemented and covered by the test suite below. What's left before a marketplace release
-> (M4): the design.md §6.1 focus-probe findings need a manual run, and the end-to-end
-> "`/explain-selection` with no `<ide_selection>` tag" check needs to happen in a real session.
-> See [design.md §13](design.md) for the full milestone breakdown.
-
----
-
 ## Why
 
 A skill or agent that wants to act on "the code I'm looking at right now" has no reliable
@@ -32,11 +20,6 @@ way to get it:
 Reading a JSON file, on the other hand, is something every agent can do in every session with
 zero setup. So the extension writes the state out and gets out of the way.
 
-> **Previously (0.1.x):** this extension published a loopback HTTP MCP server. It worked, but
-> it could never be *depended* on — off by default, dynamic port, auth token rotated on every
-> start, and Claude Code resolves MCP servers only at session start, so its tools were usually
-> absent exactly when a skill needed them. Every consumer had to handle "no MCP" anyway. That
-> server has been deleted rather than patched.
 
 ## How it works
 
@@ -89,15 +72,19 @@ selections live in [design.md §5.4](design.md).
 The extension writes the file; skills consume it. Two are bundled in this repo as a Claude Code
 plugin, so they can be installed with the same version as the extension:
 
-| Skill | What it does |
-| --- | --- |
-| `/explain-selection` | Explains the lines you have selected, in the context of the surrounding file |
-| `/explain-file` | Writes a line-by-line explanation of the active file to a `.$.md` beside it |
+A companion set of "pair agent" skills, built to work alongside the state file this extension
+writes, is maintained separately at [wisdomrock/agent_work](https://github.com/wisdomrock/agent_work).
+Download it directly, or install it as a Claude Code plugin:
 
 ```bash
 claude plugin marketplace add https://github.com/wisdomrock/agent_work
 claude plugin install explain-tools@wisdom-rock-marketplace
 ```
+
+| Skill | What it does |
+| --- | --- |
+| `/explain-selection` | Explains the lines you have selected, in the context of the surrounding file |
+| `/explain-file` | Writes a line-by-line explanation of the active file to a `.$.md` beside it |
 
 Both resolve their target by reading `.editor-state/state.json` first, and deliberately **ignore**
 the IDE selection tags the harness attaches to a message. Those tags are one-shot change events —
@@ -108,17 +95,6 @@ file instead is what makes the result deterministic.
 They are **not** part of the `.vsix`: VS Code extensions and Claude Code plugins are separate
 mechanisms, and Claude Code does not scan `~/.vscode/extensions/`. Installing the extension without
 the plugin is fine — the file is written either way, and any agent can read it.
-
-### Pair agent skills
-
-A companion set of "pair agent" skills, built to work alongside the state file this extension
-writes, is maintained separately at [wisdomrock/agent_work](https://github.com/wisdomrock/agent_work).
-Download it directly, or install it as a Claude Code plugin:
-
-```claude code commands
-/plugin marketplace add https://github.com/wisdomrock/agent_work
-/plugin install explain-tools@wisdom-rock-marketplace
-```
 
 ## Commands
 

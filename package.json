@@ -2,7 +2,7 @@
   "name": "editor-state-mcp",
   "displayName": "Editor State",
   "description": "Continuously mirrors your live editor state — active file, selection, cursor, open tabs — into a gitignored JSON file that AI coding agents can always read.",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "publisher": "wisdomrock",
   "license": "MIT",
   "engines": {
